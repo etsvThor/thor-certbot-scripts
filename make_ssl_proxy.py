@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # script to make web container proxy config for nginx with certbot.
 # Jeroen van Oorschot 2016-2017
@@ -6,47 +6,124 @@
 
 import sys
 import subprocess
+import argparse
 from time import sleep
+from shutil import which
+from string import Template
+from typing import List
 
-print("This file generates a config file for a proxy server for a container. \
-    Next it enables a http server to let letsencrypt authenticate the domain.\
-     Then a certificate is obtained and installed. \
-     Finally the temporary server is deleted and the final config is placed. \
-     The config uses a lot of includes from /etc/nginx/snippets")
+print("""This file generates a config file for a proxy server for a container.
+Next it enables a http server to let letsencrypt authenticate the domain.
+Then a certificate is obtained and installed.
+Finally the temporary server is deleted and the final config is placed.
+The config uses a lot of includes from /etc/nginx/snippets""")
 
-DEFAULT_BODY_SIZE='1M'
+DEFAULT_BODY_SIZE = '1M'
 WEBROOT = "/var/www/"
 CERT_PATH = "/etc/letsencrypt/live/"
-WEB_USER = "nginx"
+WEB_USER = "www-data"
 SERVER_PATH = "/etc/nginx/"
 TEMP_SERVER_NAME = SERVER_PATH + "sites-enabled/temp-letsencrypt"
 NGINX_RELOAD_COMMAND = ["nginx", "-s", "reload"]
 
+def run_command(command: List):
+    process = subprocess.Popen(command, stdout=subprocess.PIPE)
+    output, err = process.communicate()
+    return process.returncode, output, err
+
+
+def write_string_to_file(string: str, filename: str):
+    file = open(filename, "w")
+    file.write(string)
+    file.flush()
+    file.close()
+
+
+def read_string_from_file(filename) -> str:
+    text_file = open(filename, "r")
+    data = text_file.read()
+    text_file.close()
+    return data
+
+
+def prepare():
+    """Checks if environment is correct"""
+    if not which("nginx"):
+        raise Exception("Nginx not installed")
+    if not which("certbot"):
+        raise Exception("certbot not installed")
+
+
+def create_certbot_command(domains: List) -> List:
+    command = ["certbot", "certonly", "-n", "--nginx"]
+    for domain in domains:
+        command += ["-d", str(domain)]
+    return command
+
+
+def create_vhost_proxy_config(domains: List, container_name: str, 
+                              container_ip: str, body_size: str) -> str:
+    template = Template(read_string_from_file("vhost_proxy.conf.template"))
+    vhost_conf = template.substitute(
+        domains=", ".join(domains),
+        main_domain=domains[0],
+        body_size=body_size,
+        container_name=container_name,
+        container_ip=container_ip,
+        WEBROOT=WEBROOT,
+        CERT_PATH=CERT_PATH
+        )
+    return vhost_conf
+
+
 def good():
-    q=str(raw_input("Please check the output. Looking good? (y/n): ")).strip()
+    q = str(input("Please check the output. Looking good? (y/n): ")).strip()
     if q != "y":
         sys.exit()
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-domains", type=str,
+                    help="Domains to be used")
+parser.add_argument("-container_name", type=str,
+                    help="Name of the proxy host")
+parser.add_argument("-container_ip", type=str,
+                    help="ip of the proxy host")
+parser.add_argument("-body_size", type=str,
+                    help="Max body size (default 3M)")
+
+args = parser.parse_args()
+
+#prepare()
 
 ###############
 #Input reading#
 ###############
 
 #container name
-name=str(raw_input("Name of the web container: ")).strip()
-if name[:3] != "web":
+if (args.container_name):
+    container_name = args.container_name
+else:
+    container_name=str(input("Name of the web container: ")).strip()
+if container_name[:3] != "web":
     print("Name should start with 'web'")
-    q=raw_input("Use this name anyway? (y/n)")
+    q=input("Use this name anyway? (y/n)")
     if q != "y":
         sys.exit()
 
 #container ip, allow only "10.x.x.x" addresses.
-ip=str(raw_input('IP address of container: ')).strip()
-if ip.count('.')!=3 or len(ip)<8 or ip[:3] != "10.":
+if (args.container_ip):
+    container_ip = args.container_ip
+else:
+    container_ip=str(input('IP address of container: ')).strip()
+if container_ip.count('.')!=3 or len(container_ip)<8 or container_ip[:3] != "10.":
     print("Invalid IP address supplied")
     sys.exit()
 
 #max body size
-body_size=str(raw_input('Max body size (e.g. 3M): ')).strip()
+if (args.body_size):
+    body_size = args.body_size
+else:
+    body_size=str(input('Max body size (e.g. 3M): ')).strip()
 if len(body_size)>4 or len(body_size)==1:
     print("Invalid size supplied")
     sys.exit()
@@ -56,116 +133,42 @@ if len(body_size)==0:
     body_size = DEFAULT_BODY_SIZE
 
 #server_name
-server_name = str(raw_input('Space separated list of server names: ')).strip()
+if (args.domains):
+    server_name = args.domains
+else:
+    server_name = str(input('Comma separated list of server names: ')).strip()
 if len(server_name)==0:
     print("Invalid server_name supplied")
     sys.exit()
 
-server_name_list = server_name.split()
+server_name_list = list(map(str.strip, server_name.split(",")))
 print("Domains parsed as:")
 for server_name_single in server_name_list:
     print(server_name_single)
 first_domain = server_name_list[0]
-##############
-#Config build#
-##############
-config_server = """
-# Config for: """ + name + """
-# Generated by jvo-python-nginx-ssl-config-generator
 
-# Redirect 80 to 443
-server{
-	server_name """ + server_name + """;
-	include snippets/http_redirect.inc;
-}
-# Https proxy
-server{
-	server_name """ + server_name + """;
-	root """ + WEBROOT + name + """; #root is needed for letsencrypt challenge
-	include snippets/ssl_config.inc;
-	client_max_body_size """ + body_size + """;
+command = create_certbot_command(server_name_list)
 
-	ssl_certificate """ + CERT_PATH + first_domain + """/fullchain.pem;
-	ssl_certificate_key """ + CERT_PATH + first_domain + """/privkey.pem;
+exitcode, stdout, stderr = run_command(command)
+print(stdout)
+print(stderr)
+if exitcode != 0:
+    raise Exception(f"Certbot command failed: {command}")
 
-	location / {
-		proxy_pass	http://""" + ip + """;
-		include snippets/proxy_params.inc;
-	}
-}
-"""
-print("Config now looks like:")
-print(config_server)
-
-good()
-
-#############################################
-#Temporary server for letsencrypt first cert#
-#############################################
-print("Setting temp server for letsencrypt to get initial certificate.")
-temp_config_server="""
-# This is a temporary http server, for validating a domain for letsencrypt.
-# This should not be used outside the make_ssl_proxy.py script.
-
-server{
-	server_name """ + server_name + """;
-	listen 80;
-
-	# for letsencrypt challenge
-	location ~ /.well-known {
-        	allow all;
-	}
-
-	root """ + WEBROOT + name + """;
-}
-"""
-file = open(TEMP_SERVER_NAME,"w")
-file.write(temp_config_server)
-file.flush()
-file.close()
-subprocess.check_output(['nginx','-t'])
-good()
-##################
-#Generating certs#
-##################
-
-#make dir for letsencrypt challenge
-folder = WEBROOT+name
-subprocess.call(["mkdir", folder])
-subprocess.call(["chgrp", WEB_USER,folder])
-subprocess.call(["chmod", "770", folder])
-
-print("reloading nginx...")
-subprocess.check_output(NGINX_RELOAD_COMMAND)
-
-#generate cert
-command = "certbot certonly -n --webroot -w " + WEBROOT + name
-for server_name_single in server_name_list:
-    command += " -d " + server_name_single
-
-#shell because a string is passed
-try:
-    subprocess.check_output(command, shell=True)
-except:
-    print("Certbot failed");
-
-print("If certbot did not produce output, continue.\
- \n If certbot failed, exit the script and run nginx -s reload and \
- the above certbot command manually. Then rerun this script.")
+print("""If certbot did not produce output, continue.\n
+If certbot failed, exit the script and run nginx -s reload and
+the above certbot command manually. Then rerun this script.""")
 good()
 
 ######################################
 #Remove temp server and install final#
 ######################################
+vhost_config = create_vhost_proxy_config(server_name_list, container_name, container_ip, body_size)
+filename = SERVER_PATH + "sites-available/" + container_name
 
-# remove temp server
-subprocess.call(["rm",TEMP_SERVER_NAME])
-# add new
-file = open(SERVER_PATH + "sites-available/" + name,"w")
-file.write(config_server)
-file.flush()
-file.close()
-subprocess.call(["ln","-s","../sites-available/" + name, "/etc/nginx/sites-enabled/" + name])
+write_string_to_file(vhost_config, filename)
+
+subprocess.call(["ln","-s","../sites-available/" + container_name, "/etc/nginx/sites-enabled/" + container_name])
 subprocess.check_output(['nginx','-t'])
 good()
 print("reloading nginx...")

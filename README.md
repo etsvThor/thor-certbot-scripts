@@ -4,10 +4,15 @@ Scripts for creating and updating letsencrypt certs.
 ## make_ssl_proxy.py
 This script obtains a cert for a new domain. These domains will be proxied to a given ip-address of an lxc-container.
 
-It generates a config file for a proxy server for a container.
-Next it enables a http server to let letsencrypt authenticate the domain.
+Install requirements:
+```
+apt-get install certbot
+apt-get install python-certbot-nginx
+```
+
+It creates a new certificate using the certbot nginx plugin.
 Then a certificate is obtained and installed.
-Finally the temporary server is deleted and the final config is placed, and nginx is reloaded.
+Finally the final config (from the template) is placed, and nginx is reloaded.
 The config uses a lot of includes from /etc/nginx/snippets")
 
 ## get_server_names.py
