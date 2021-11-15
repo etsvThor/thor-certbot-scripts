@@ -15,6 +15,18 @@ Then a certificate is obtained and installed.
 Finally the final config (from the template) is placed, and nginx is reloaded.
 The config uses a lot of includes from /etc/nginx/snippets")
 
+## make_wildcard_cert.py
+This script obtains a wildcard cert for a new domain using DNS01 auth.
+
+Install requirements:
+```
+apt-get install certbot
+```
+
+Install  [acme-dns](https://github.com/joohoi/acme-dns) (does not have to be local).
+
+Configure the [auth hook](https://github.com/joohoi/acme-dns-certbot-joohoi).
+
 ## get_server_names.py
 This script parses an nginx server config file and prints all its server names in certbot command style.
 This can be used to update an existing letsencrypt cert with more domain names.
